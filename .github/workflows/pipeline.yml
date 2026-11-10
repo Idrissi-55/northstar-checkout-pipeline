@@ -1,21 +1,17 @@
 # The delivery pipeline of the Northstar checkout.
 # On a pull request: lint and unit tests only.
-# On a merge to main: tests, one image, staging, then production after an approval.
+# On a merge to main: tests, one image, staging, a canary, then production.
 name: Pipeline
-
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: northstar/checkout
-
 jobs:
   test:
     name: Lint and unit tests
@@ -26,49 +22,40 @@ jobs:
     steps:
       - name: Get the code
         uses: actions/checkout@v7
-
       - name: Install Python 3.12
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-
       - name: Install the dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
-
       - name: Lint
         run: ruff check .
-
       - name: Unit tests
         run: python -m pytest -v
-
   build:
     name: Build, push and scan the image
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
-      id-token: write    # lets the job ask GitHub for an OIDC token
+      id-token: write
       contents: read
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
       - name: Get the code
         uses: actions/checkout@v7
-
       - name: Name the image after the commit
         id: tag
         run: echo "image_tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-
       - name: Get temporary AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
       - name: Log in to Amazon ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
-
       - name: Build and push the image once
         env:
           IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.image_tag }}
@@ -81,12 +68,10 @@ jobs:
           fi
           docker build --build-arg APP_VERSION="$IMAGE_TAG" -t "$IMAGE" app/
           docker push "$IMAGE"
-
       - name: Wait for the scan and stop on critical findings
         env:
           IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
         run: |
-          # ECR starts the scan a few seconds after the push. Ask for its status every 10 seconds.
           for ATTEMPT in $(seq 1 30); do
             STATUS=$(aws ecr describe-image-scan-findings --repository-name "$ECR_REPOSITORY" --image-id imageTag="$IMAGE_TAG" \
               --query 'imageScanStatus.status' --output text 2> /dev/null || echo "NOT_STARTED")
@@ -108,7 +93,6 @@ jobs:
             echo "::error::The image has $CRITICAL critical vulnerabilities. It is not deployed."
             exit 1
           fi
-
   deploy-staging:
     name: Staging
     needs: build
@@ -119,10 +103,42 @@ jobs:
     with:
       environment: staging
       image_tag: ${{ needs.build.outputs.image_tag }}
-
+  canary:
+    name: Canary in production
+    needs: [build, deploy-staging]
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+      - name: Get temporary AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Connect kubectl to the cluster
+        run: aws eks update-kubeconfig --name northstar-eks --region "$AWS_REGION"
+      - name: Start one canary Pod next to the stable Pods
+        working-directory: k8s/canary
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          kustomize edit set image "checkout=$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
+          kubectl apply -k .
+          kubectl -n prod rollout status deployment/checkout-canary --timeout=120s
+      - name: Measure the share of traffic that reaches the canary
+        run: ./scripts/canary-share.sh prod "$IMAGE_TAG" 40
+      - name: Remove the canary after a failure
+        if: failure()
+        run: |
+          kubectl -n prod delete deployment checkout-canary --ignore-not-found
   deploy-production:
     name: Production
-    needs: [build, deploy-staging]
+    needs: [build, canary]
     uses: ./.github/workflows/deploy.yml
     permissions:
       id-token: write
