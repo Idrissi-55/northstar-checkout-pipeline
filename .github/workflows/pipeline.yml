@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: eu-west-3
+  AWS_REGION: eu-north-1
   ECR_REPOSITORY: northstar/checkout
 
 jobs:

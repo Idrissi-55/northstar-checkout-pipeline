@@ -21,13 +21,13 @@
         "ecr:PutImage",
         "ecr:UploadLayerPart"
       ],
-      "Resource": "arn:aws:ecr:eu-west-3:ACCOUNT_ID:repository/northstar/checkout"
+      "Resource": "arn:aws:ecr:eu-north-1:ACCOUNT_ID:repository/northstar/checkout"
     },
     {
       "Sid": "FindTheCluster",
       "Effect": "Allow",
       "Action": "eks:DescribeCluster",
-      "Resource": "arn:aws:eks:eu-west-3:ACCOUNT_ID:cluster/northstar-eks"
+      "Resource": "arn:aws:eks:eu-north-1:ACCOUNT_ID:cluster/northstar-eks"
     }
   ]
 }

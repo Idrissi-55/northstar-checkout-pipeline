@@ -7,7 +7,7 @@ kind: ClusterConfig
 
 metadata:
   name: northstar-eks
-  region: eu-west-3
+  region: eu-north-1
   tags:
     project: northstar
     lab: m03-d07

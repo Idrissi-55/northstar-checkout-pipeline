@@ -16,7 +16,7 @@ Production*. Create your own copy with **Use this template**, keep it
 | `scripts/smoke-test.sh` | The test that runs after each deployment |
 | `challenge/` | Starter files of the canary challenge |
 
-Everything runs from AWS CloudShell in Europe (Paris), `eu-west-3`. The
+Everything runs from AWS CloudShell in Europe (Stockholm), `eu-north-1`. The
 cluster bills by the hour until you delete it:
 
 ```bash
